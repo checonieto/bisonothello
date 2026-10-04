@@ -45,6 +45,8 @@
     padding:max(14px, env(safe-area-inset-top)) 14px max(18px, env(safe-area-inset-bottom));
     gap:14px;
     overflow-x:hidden;
+    touch-action:manipulation;
+    -webkit-tap-highlight-color:transparent;
   }
 
   /* ---------- decorative background (bisons + web dev icons) ---------- */
@@ -209,23 +211,6 @@
 
   footer{font-size:.75rem;color:var(--gray-400);text-align:center;margin-top:2px}
 
-  /* ---------- taunt banner ---------- */
-  .taunt{
-    position:fixed;left:50%;top:16%;z-index:30;transform:translate(-50%,-20px) scale(.9);
-    width:max-content;max-width:min(92vw,540px);padding:14px 20px;border-radius:16px;
-    display:flex;align-items:center;gap:14px;text-align:left;
-    font-family:var(--display);font-weight:800;font-size:clamp(1.02rem,4.2vw,1.45rem);line-height:1.25;
-    color:#031512;background:linear-gradient(135deg,var(--teal-300),var(--teal-500));
-    border:2px solid var(--gray-100);box-shadow:0 20px 50px rgba(0,0,0,.55), 0 0 40px rgba(45,212,191,.55);
-    opacity:0;pointer-events:none;transition:opacity .25s, transform .35s cubic-bezier(.3,1.6,.5,1);
-    --mane:#0c2748;--face:#12365e;--muzzle:#2f6a8c;--horn:#031512;
-  }
-  .taunt.show{opacity:1;transform:translate(-50%,0) scale(1)}
-  .taunt .tb{width:50px;height:50px;flex:none}
-  .taunt small{display:block;font-family:var(--body);font-weight:600;font-size:.72em;margin-top:4px;color:var(--navy-900)}
-  .taunt.shake{animation:shake .5s}
-  @keyframes shake{0%,100%{margin-left:0}20%{margin-left:-10px}40%{margin-left:10px}60%{margin-left:-6px}80%{margin-left:6px}}
-
   /* ---------- end modal ---------- */
   .modal{
     position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;
@@ -366,13 +351,9 @@
     <option value="cpu">Play the Bison Bot</option>
   </select>
   <button class="toggle" id="sndBtn" aria-pressed="true">Sounds on</button>
-  <button class="toggle" id="voiceBtn" aria-pressed="true">Trash talk on</button>
   <button class="toggle" id="hintBtn" aria-pressed="true">Hints on</button>
 </div>
-
-<footer>Friendly rivalry only. The trash talk is all in good fun.</footer>
-
-<div class="taunt" id="taunt" role="status"></div>
+<footer>Friendly rivalry only. Have a great time!</footer>
 
 <div class="modal" id="modal">
   <div class="card">
@@ -392,8 +373,10 @@
   const $ = id => document.getElementById(id);
   const gridEl = $("grid");
 
-  const state = { sound:true, voice:true, hints:true, mode:"pvp" };
-  let board, turn, over, busy, last, cells = [], tauntTimer, idleT, started = false, lastMock = -1;
+  const state = { sound:true, hints:true, mode:"pvp" };
+  let board, turn, over, busy, last, cells = [];
+  let gid = 0;            // game id: bumped on every reset so stale timers from an old game do nothing
+  const later = (fn, ms) => { const g = gid; return setTimeout(() => { if (g === gid) fn(); }, ms); };
 
   /* ================= BACKGROUND DECOR ================= */
   (function buildBackground(){
@@ -448,7 +431,7 @@
   })();
 
   /* ================= AUDIO (Web Audio, no files needed) ================= */
-  let AC, NOISE;
+  let AC;
   function ac(){
     if(!AC){ AC = new (window.AudioContext || window.webkitAudioContext)(); }
     if(AC.state === "suspended") AC.resume();
@@ -480,205 +463,14 @@
       o.start(s); o.stop(s + t + .05);
     }catch(e){}
   }
-  function noise({t=.2, at=0, v=.2, filter={type:"lowpass", f:800}}){
-    if(!state.sound) return;
-    try{
-      const a = ac();
-      if(!NOISE){
-        NOISE = a.createBuffer(1, a.sampleRate, a.sampleRate);
-        const d = NOISE.getChannelData(0);
-        for(let i=0;i<d.length;i++) d[i] = Math.random()*2-1;
-      }
-      const src = a.createBufferSource(), g = a.createGain(), bf = a.createBiquadFilter();
-      const s = a.currentTime + at;
-      src.buffer = NOISE; src.loop = true;
-      bf.type = filter.type; bf.frequency.setValueAtTime(filter.f, s); bf.Q.value = filter.q || 1;
-      if(filter.f2) bf.frequency.exponentialRampToValueAtTime(filter.f2, s + t);
-      g.gain.setValueAtTime(.0001, s);
-      g.gain.exponentialRampToValueAtTime(v, s + .01);
-      g.gain.exponentialRampToValueAtTime(.0001, s + t);
-      src.connect(bf); bf.connect(g); g.connect(a.destination);
-      src.start(s); src.stop(s + t + .05);
-    }catch(e){}
-  }
-
   const sfx = {
     place(){ tone({f:320,f2:110,t:.12,type:"triangle",v:.35}); },
     flip(i=0){ tone({f:900+i*40,f2:500,t:.05,type:"square",v:.06}); },
-    ouch(){
-      tone({f:520,f2:300,t:.18,type:"sawtooth",v:.12,filter:{type:"lowpass",f:1400}});
-      tone({f:360,f2:200,t:.28,type:"sawtooth",v:.12,at:.18,filter:{type:"lowpass",f:1200}});
-    },
-    trombone(){ // sad "wah wah wah waaah"
-      const f = {type:"lowpass",f:900,q:2};
-      tone({f:233,f2:225,t:.38,type:"sawtooth",v:.2,at:0,filter:f});
-      tone({f:220,f2:212,t:.38,type:"sawtooth",v:.2,at:.45,filter:f});
-      tone({f:208,f2:200,t:.38,type:"sawtooth",v:.2,at:.9,filter:f});
-      tone({f:196,f2:150,t:1.0,type:"sawtooth",v:.22,at:1.35,filter:f,vib:6});
-    },
-    wompwomp(){
-      const f = {type:"lowpass",f:420,q:1};
-      tone({f:131,f2:123,t:.4,type:"square",v:.22,at:0,filter:f});
-      tone({f:110,f2:73,t:.8,type:"square",v:.24,at:.5,filter:f,vib:3});
-    },
-    laugh(){
-      for(let i=0;i<7;i++){
-        tone({f:330-i*16,f2:250-i*16,t:.1,type:"sawtooth",v:.16,at:i*.15,filter:{type:"bandpass",f:900,q:3}});
-      }
-    },
-    slide(){ // cartoon slide whistle going down
-      tone({f:1500,f2:170,t:1.0,type:"sine",v:.22,vib:25});
-    },
-    scratch(){ // record scratch
-      noise({t:.35,v:.28,filter:{type:"bandpass",f:3200,f2:700,q:4}});
-      tone({f:700,f2:180,t:.3,type:"sawtooth",v:.12,filter:{type:"bandpass",f:1500,q:2}});
-      noise({t:.2,at:.38,v:.2,filter:{type:"bandpass",f:900,f2:2800,q:4}});
-    },
-    rimshot(){ // ba-dum-tss
-      tone({f:170,f2:60,t:.14,type:"sine",v:.5,at:0});
-      noise({t:.1,at:.18,v:.3,filter:{type:"highpass",f:1800}});
-      tone({f:170,f2:60,t:.14,type:"sine",v:.5,at:.3});
-      noise({t:.6,at:.42,v:.22,filter:{type:"highpass",f:6500}});
-    },
-    buzzer(){ // wrong answer
-      tone({f:118,t:.7,type:"sawtooth",v:.22,filter:{type:"lowpass",f:1200}});
-      tone({f:124,t:.7,type:"square",v:.12,filter:{type:"lowpass",f:1000}});
-    },
-    ooh(){ // crowd "ooooh"
-      [392,494,587].forEach((f,i)=>tone({f,f2:f*.72,t:1.1,type:"triangle",v:.1,at:i*.02,filter:{type:"lowpass",f:900,q:3},vib:5}));
-      noise({t:1.0,v:.08,filter:{type:"bandpass",f:700,q:2}});
-    },
-    snort(){ // bison snort
-      noise({t:.28,v:.45,filter:{type:"lowpass",f:520,f2:240,q:2}});
-      tone({f:95,f2:60,t:.5,type:"sawtooth",v:.2,at:.05,filter:{type:"lowpass",f:260},vib:8});
-      noise({t:.25,at:.4,v:.35,filter:{type:"lowpass",f:420,f2:200,q:2}});
-    },
-    airhorn(){
-      [440,554,659].forEach(f=>tone({f,f2:f*.98,t:.8,type:"sawtooth",v:.09,filter:{type:"lowpass",f:2400}}));
-    },
-    clock(){ for(let i=0;i<4;i++) tone({f:i%2?900:1200,t:.04,type:"square",v:.07,at:i*.35}); },
-    boing(){ tone({f:150,f2:520,t:.16,type:"sine",v:.3}); tone({f:520,f2:140,t:.35,type:"sine",v:.3,at:.16}); },
+    pass(){ tone({f:330,f2:220,t:.25,type:"triangle",v:.2}); },
     fanfare(){ [523,659,784,1046,784,1046].forEach((f,i)=>tone({f,t:.22,type:"square",v:.12,at:i*.14,filter:{type:"lowpass",f:2600}})); }
   };
 
-  /* ================= TRASH TALK (friendly, speech synthesis) ================= */
-  const L = {
-    small: [
-      "Ouch, {l}. That one stung.",
-      "{w} is just warming up, {l}.",
-      "Nice try, {l}. Not nice enough.",
-      "{l}, are you even looking at the board?",
-      "{l} just got a 404: strategy not found."
-    ],
-    big: [
-      "{w} just humiliated {l}!",
-      "{l} got Bison-ed!",
-      "Somebody call HR, {l} needs emotional support!",
-      "{l}, was that your plan the whole time?",
-      "That was cruel, {w}. I loved it.",
-      "{l} has left the building.",
-      "{l}, that move had more bugs than a Friday deploy."
-    ],
-    corner: [
-      "Corner taken! Sit down, {l}.",
-      "{w} owns the corner now, {l}. Pay rent.",
-      "{l}, that corner was a gift to {w}."
-    ],
-    pass: [
-      "{l} has no moves. Skipped!",
-      "{l}, nothing to play? Embarrassing.",
-      "Turn skipped. {w} says thanks, {l}."
-    ],
-    comeback: [
-      "{w} is climbing back, {l} should be nervous.",
-      "The tables have turned, {l}!"
-    ],
-    idle: [
-      "Hello? {w}, we don't have all day.",
-      "Is the page loading, {w}? Try refreshing your brain.",
-      "{w} is thinking... or buffering.",
-      "Error 408, {w}. Request timed out."
-    ],
-    win: [
-      "{w} wins! {l}, buy the coffee.",
-      "{w} crushed it. {l} will remember this at the next meeting.",
-      "Victory for {w}. {l}, we are all very proud of you for trying."
-    ],
-    lose: [
-      "{w} wins, but {l} fought hard. Rematch!"
-    ]
-  };
-  // random "humiliation" moments: sound + line
-  const MOCKS = [
-    {snd:"wompwomp", say:"Womp womp, {l}."},
-    {snd:"slide",    say:"Wheeeee. That is {l}'s confidence going down."},
-    {snd:"scratch",  say:"Wait, {l}. Did you mean to play that?"},
-    {snd:"rimshot",  say:"Ba dum tss. That is {l}'s whole strategy."},
-    {snd:"buzzer",   say:"Incorrect, {l}."},
-    {snd:"ooh",      say:"Ooooh. {l}, that is going to leave a mark."},
-    {snd:"snort",    say:"Even the bison is unimpressed, {l}."},
-    {snd:"laugh",    say:"Ha ha ha! Sorry {l}, I could not help it."},
-    {snd:"trombone", say:"{l}, the sad trombone is playing for you."},
-    {snd:"buzzer",   say:"Error 500, {l}. Internal strategy failure."}
-  ];
-
-  const pick = a => a[Math.floor(Math.random()*a.length)];
   const nm = p => ($("name"+p).value.trim() || ("Player "+p));
-  const fmt = (s,w,l) => s.replaceAll("{w}",nm(w)).replaceAll("{l}",nm(l));
-
-  function speak(text){
-    if(!state.voice || !("speechSynthesis" in window)) return;
-    try{
-      speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.rate = 1.05; u.pitch = .8 + Math.random()*.6; u.volume = 1;
-      speechSynthesis.speak(u);
-    }catch(e){}
-  }
-  function banner(text, sub, shake){
-    const el = $("taunt");
-    el.innerHTML = '<svg class="tb" viewBox="0 0 64 64" aria-hidden="true"><use href="#i-bison"/></svg><div>' +
-                   text + (sub ? "<small>" + sub + "</small>" : "") + "</div>";
-    el.classList.remove("show","shake");
-    void el.offsetWidth;
-    el.classList.add("show");
-    if(shake) el.classList.add("shake");
-    const m = $("mascot");
-    m.classList.remove("laugh"); void m.getBoundingClientRect(); m.classList.add("laugh");
-    clearTimeout(tauntTimer);
-    tauntTimer = setTimeout(()=>el.classList.remove("show"), 3400);
-  }
-  function taunt(kind, w, l, sub, shake){
-    const text = fmt(pick(L[kind]), w, l);
-    banner(text, sub, shake);
-    speak(text);
-  }
-  function mock(w, l){
-    let i; do{ i = Math.floor(Math.random()*MOCKS.length); } while(i === lastMock && MOCKS.length > 1);
-    lastMock = i;
-    const m = MOCKS[i];
-    sfx[m.snd]();
-    const text = fmt(m.say, w, l);
-    banner(text);
-    setTimeout(() => speak(text), m.snd === "trombone" ? 1900 : 350);
-  }
-
-  /* ---------- idle nagging ---------- */
-  function armIdle(){
-    clearTimeout(idleT);
-    if(!started || over || busy || isCpuTurn()) return;
-    idleT = setTimeout(() => {
-      if(over || busy || isCpuTurn()) return;
-      sfx.clock();
-      setTimeout(() => { (Math.random() < .5 ? sfx.slide : sfx.snort)(); }, 1500);
-      const text = fmt(pick(L.idle), turn, 3 - turn);
-      banner(text); setTimeout(() => speak(text), 1200);
-      armIdle();
-    }, 16000);
-  }
-  document.addEventListener("pointerdown", () => {
-    if(!started){ started = true; armIdle(); }
-  });
 
   /* ================= GAME LOGIC ================= */
   function newBoard(){
@@ -740,7 +532,6 @@
       cells[r][c].classList.toggle("valid", mv.some(m=>m.r===r&&m.c===c));
       cells[r][c].classList.toggle("last", !!last && last[0]===r && last[1]===c);
     }
-    armIdle();
   }
   function renderScores(){
     $("score1").textContent = count(1);
@@ -778,45 +569,22 @@
     sfx.place();
     f.forEach(([y,x],i) => {
       board[y][x] = mover;
-      setTimeout(() => { setDisc(y,x,mover); sfx.flip(i); renderScores(); }, 160 + i*95);
+      later(() => { setDisc(y,x,mover); sfx.flip(i); renderScores(); }, 160 + i*95);
     });
     renderHints(); renderScores();
 
-    const total = 160 + f.length*95 + 450;
-    setTimeout(() => afterMove(mover, victim, f.length, isCorner(r,c), before1, before2), total);
+    later(() => afterMove(mover, victim, f.length, isCorner(r,c), before1, before2), 160 + f.length*95 + 450);
   }
 
   function afterMove(mover, victim, nFlips, corner, b1, b2){
-    let spoke = false;
-    const mBefore = mover===1 ? b1 : b2, vBefore = mover===1 ? b2 : b1;
-    const wasBehind = mBefore < vBefore;
-
-    if(corner){
-      sfx.airhorn(); setTimeout(()=>sfx.snort(), 900);
-      taunt("corner", mover, victim, "", true); spoke = true;
-    } else if(nFlips >= 5){
-      sfx.trombone(); setTimeout(()=>sfx.laugh(), 2500);
-      taunt("big", mover, victim, "You flipped " + nFlips + " discs in one move!", true); spoke = true;
-    } else if(nFlips >= 3){
-      if(Math.random() < .5){ sfx.ooh(); } else { sfx.ouch(); }
-      taunt("small", mover, victim); spoke = true;
-    } else if(wasBehind && count(mover) > count(victim)){
-      sfx.laugh(); taunt("comeback", mover, victim); spoke = true;
-    }
-
-    // every now and then: a random humiliation sound, even on quiet moves
-    if(!spoke && Math.random() < .42){
-      mock(mover, victim); spoke = true;
-    }
-
     const next = 3 - mover;
     let passMsg = null;
     if(movesFor(next).length){
       turn = next;
     } else if(movesFor(mover).length){
       turn = mover;
-      passMsg = nm(next)+" has no moves. "+nm(mover)+" plays again.";
-      setTimeout(() => { sfx.boing(); setTimeout(()=>sfx.wompwomp(), 500); taunt("pass", mover, next, "", false); }, spoke ? 2200 : 100);
+      passMsg = nm(next) + " has no moves. " + nm(mover) + " plays again.";
+      sfx.pass();
     } else {
       return endGame();
     }
@@ -837,7 +605,7 @@
   function scheduleCpu(){
     if(!isCpuTurn() || busy) return;
     busy = true; renderHints(); renderStatus(nm(2)+" is thinking...");
-    setTimeout(() => {
+    later(() => {
       busy = false;
       const mv = movesFor(2);
       if(!mv.length) return;
@@ -852,24 +620,18 @@
     over = true; busy = false;
     const a = count(1), b = count(2);
     renderScores(); renderHints(); renderStatus("Game over");
-    setTimeout(() => {
+    later(() => {
       let title, text;
       if(a === b){
-        title = "It's a draw"; text = "Nobody gets bragging rights. Rematch to settle it.";
-        banner("A draw! Nobody wins, nobody gloats."); speak("A draw. Nobody wins, nobody gloats.");
-        sfx.boing();
+        title = "It's a draw";
+        text = "Evenly matched. Rematch to settle it.";
       } else {
-        const w = a>b?1:2, l = 3-w, diff = Math.abs(a-b);
+        const w = a>b?1:2, diff = Math.abs(a-b);
         title = nm(w) + " wins!";
-        text = diff >= 20 ? nm(l)+" was totally crushed. Brutal."
-             : diff >= 8  ? nm(l)+" will want a rematch."
-             : "What a close one. Great game from both.";
-        sfx.fanfare();
-        if(diff >= 8){ setTimeout(()=>sfx.trombone(), 1100); setTimeout(()=>sfx.laugh(), 3700); }
-        const t = fmt(pick(diff>=8 ? L.win : L.lose), w, l);
-        banner(t); setTimeout(()=>speak(t), 900);
+        text = diff >= 8 ? "A convincing win. Well played, both of you." : "What a close one. Great game from both.";
         confetti();
       }
+      sfx.fanfare();
       $("mTitle").textContent = title;
       $("mScore").textContent = a + " - " + b;
       $("mText").textContent = text;
@@ -893,10 +655,8 @@
 
   /* ================= SETUP ================= */
   function reset(){
-    clearTimeout(tauntTimer); clearTimeout(idleT);
-    $("taunt").classList.remove("show");
+    gid++;                       // invalidates every pending timer from the previous game
     $("modal").classList.remove("show");
-    if("speechSynthesis" in window) try{speechSynthesis.cancel();}catch(e){}
     board = newBoard(); turn = 1; over = false; busy = false; last = null;
     renderAll();
   }
@@ -915,13 +675,11 @@
       state[key] = !state[key];
       btn.setAttribute("aria-pressed", state[key]);
       btn.textContent = state[key] ? onTxt : offTxt;
-      if(key==="voice" && !state.voice && "speechSynthesis" in window) try{speechSynthesis.cancel();}catch(e){}
       if(key==="hints") $("frame").classList.toggle("hints-off", !state.hints);
       if(state[key]) ac();
     };
   }
   toggler($("sndBtn"), "sound", "Sounds on", "Sounds off");
-  toggler($("voiceBtn"), "voice", "Trash talk on", "Trash talk off");
   toggler($("hintBtn"), "hints", "Hints on", "Hints off");
   ["name1","name2"].forEach(id => $(id).addEventListener("input", () => { renderStatus(); }));
 
